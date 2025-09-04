@@ -1,0 +1,14 @@
+pika
+opencv-python
+numpy
+ultralytics
+boxmot
+torchreid
+Pillow
+sqlalchemy
+chromadb
+faiss-cpu
+transformers
+accelerate
+sentence-transformers
+tqdm

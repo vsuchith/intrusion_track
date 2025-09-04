@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.12-management   # includes the management UI (port 15672)
+    container_name: rabbitmq
+    hostname: rabbitmq
+    restart: always                   # restart policy
+    ports:
+      - "5672:5672"   # RabbitMQ messaging port (AMQP)
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest    # default username
+      RABBITMQ_DEFAULT_PASS: guest    # default password
