@@ -2,9 +2,15 @@
 RABBIT_URL = "amqp://guest:guest@localhost:5672/%2F"
 
 # Two clips acting as cameras (edit these)
+"""
 CAMERA_SOURCES = {
     "cam1": "/home/msi/Desktop/cam1.mp4",
     "cam2": "/home/msi/Desktop/cam2.mp4",
+}
+"""
+CAMERA_SOURCES = {
+    "cam0": 0,   # /dev/video0
+    "cam1": 2    # /dev/video2
 }
 
 # Exchanges

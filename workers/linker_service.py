@@ -47,11 +47,11 @@ class Linker:
 linker = Linker(config.SIM_THRESHOLD, config.MERGE_WINDOW_MS)
 
 def ensure_topology(ch):
-    ch.exchange_declare(exchange=config.EX_REID, exchange_type='topic', durable=True)    
+    ch.exchange_declare(exchange=config.EX_REID, exchange_type='direct', durable=True)    
     ch.queue_declare(queue=config.Q_REID_ANY, durable=True)
     ch.queue_bind(queue=config.Q_REID_ANY, exchange=config.EX_REID, routing_key='reid_frames')
 
-    ch.exchange_declare(exchange=config.EX_GLOBAL_TRACKS, exchange_type='topic', durable=True)
+    ch.exchange_declare(exchange=config.EX_GLOBAL_TRACKS, exchange_type='direct', durable=True)
     ch.queue_declare(queue=config.Q_DISPLAY, durable=True)
     ch.queue_bind(queue=config.Q_DISPLAY, exchange=config.EX_GLOBAL_TRACKS, routing_key='global_track_frames')
 
@@ -59,12 +59,14 @@ def on_reid(ch, method, props, body):
     try:    
         data = json.loads(body.decode('utf-8'))
         cam_id = data["cam_id"]; t_ms = data["t_ms"]
+        logger.info(f"[Linker Processing] with {len(data['tracks'])} tracks from {cam_id}")
         for a in data["tracks"]:
             emb = a.get("embedding")
             if emb is None: 
                 continue
             emb = np.array(emb, dtype=np.float32)
             gid = linker.assign(cam_id, a["track_id"], emb, t_ms)
+            logger.info(f"[Linker Assigned] track {a['track_id']} to global ID {gid}")
             a["global_id"] = int(gid)
         ch.basic_publish(exchange=config.EX_GLOBAL_TRACKS, routing_key="global_track_frames",
                         body=json.dumps(data).encode('utf-8'),
@@ -92,9 +94,13 @@ def main():
     #ch.basic_qos(prefetch_count=8)
     ch.basic_consume(queue=config.Q_REID_ANY, on_message_callback=on_reid, auto_ack=False)
     logger.info("[linker] running.")
-    try: ch.start_consuming()
-    except KeyboardInterrupt: pass
-    finally: ch.close(); conn.close()
+    try: 
+        ch.start_consuming()
+    except KeyboardInterrupt:
+        pass
+    finally: 
+        ch.close()
+        conn.close()
 
 if __name__ == "__main__":
     main()

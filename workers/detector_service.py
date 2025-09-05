@@ -42,9 +42,14 @@ def on_frame(ch, method, props, body):
         if res.boxes is not None and len(res.boxes) > 0:
             xyxy = res.boxes.xyxy.cpu().numpy()
             conf = res.boxes.conf.cpu().numpy()
-            cls  = res.boxes.cls.cpu().numpy()
-            dets = np.concatenate([xyxy, conf[:,None], cls[:,None]], axis=1).tolist()
-        
+            cls_ = res.boxes.cls.cpu().numpy()
+            # Filter detections (e.g., only person class = 0)
+            for box, score, cls in zip(xyxy, conf, cls_):
+                if cls == 0 and score > 0.3:  # person class with minimum confidence
+                    x1, y1, x2, y2 = box
+                    dets.append([x1, y1, x2, y2, score])
+            dets = np.concatenate([xyxy, conf[:,None]], axis=1).tolist()
+        logger.info(f"[Detections Published] with detections {dets} from {cam_id} with Frame number {frame_id}.")
         out = {
             "cam_id": cam_id,
             "t_ms": msg["t_ms"],
