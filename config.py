@@ -15,10 +15,10 @@ EX_REID = "reid"                # reid -> linker
 EX_GLOBAL_TRACKS = "global_tracks" # linker -> display/logger
 
 # Queues
-Q_FRAMES_ANY = "frames.any"
-Q_DETS_ANY = "detections.any"
-Q_TRACKS_ANY = "tracks.any"
-Q_REID_ANY = "reid.any"
+Q_FRAMES_ANY = "frames_any"
+Q_DETS_ANY = "detections_any"
+Q_TRACKS_ANY = "tracks_any"
+Q_REID_ANY = "reid_any"
 Q_DISPLAY = "display_and_logger"
 
 # Processing params
