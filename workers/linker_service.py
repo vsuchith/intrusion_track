@@ -1,3 +1,5 @@
+# This script assigns Global ids across cameras
+
 import pika, json, numpy as np, logging, traceback, logging
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -15,13 +17,15 @@ logger = logging.getLogger("linker_service")
 
 class Linker:
     def __init__(self, sim_thr, window_ms):
-        self.sim_thr = sim_thr; self.window_ms = window_ms
+        self.sim_thr = sim_thr
+        self.window_ms = window_ms
         self.next_gid = 1
-        self.gallery = deque(maxlen=5000)  # {gid, cam_id, emb, t_ms}
-        self.cam_track_gid = defaultdict(dict)
+        self.gallery = deque(maxlen=5000)  # recent embeddings with {gid, cam_id, emb, t_ms}
+        self.cam_track_gid = defaultdict(dict) # map (cam_id, track_id) -> global_id
 
     @staticmethod
-    def cos(a,b): return float(np.dot(a,b))
+    def cos(a,b): 
+        return float(np.dot(a,b))
 
     def assign(self, cam_id, tid, emb, t_ms):
         best = (None, -1.0)
@@ -34,7 +38,8 @@ class Linker:
         if best[0] is not None and best[1] >= self.sim_thr:
             gid = best[0]
         else:
-            gid = self.next_gid; self.next_gid += 1
+            gid = self.next_gid
+            self.next_gid += 1
         self.gallery.append({"gid": gid, "cam_id": cam_id, "emb": emb, "t_ms": t_ms})
         self.cam_track_gid[cam_id][tid] = gid
         return gid
@@ -56,7 +61,8 @@ def on_reid(ch, method, props, body):
         cam_id = data["cam_id"]; t_ms = data["t_ms"]
         for a in data["tracks"]:
             emb = a.get("embedding")
-            if emb is None: continue
+            if emb is None: 
+                continue
             emb = np.array(emb, dtype=np.float32)
             gid = linker.assign(cam_id, a["track_id"], emb, t_ms)
             a["global_id"] = int(gid)

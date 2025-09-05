@@ -15,6 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("detector_service")
 yolo = YOLO('yolov8n.pt')
 
+# RabbitMQ topology
 def ensure_topology(ch):
     #Subscriber Queue and Exchange Declare
     ch.exchange_declare(exchange=config.EX_FRAMES, exchange_type='direct', durable=True)    
@@ -37,6 +38,7 @@ def on_frame(ch, method, props, body):
                            classes=[config.PERSON_CLASS], verbose=False)[0]
 
         dets = []
+        # Convert to [x1,y1,x2,y2,conf,cls]
         if res.boxes is not None and len(res.boxes) > 0:
             xyxy = res.boxes.xyxy.cpu().numpy()
             conf = res.boxes.conf.cpu().numpy()

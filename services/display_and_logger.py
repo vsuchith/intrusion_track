@@ -1,4 +1,6 @@
 import pika, json, cv2, logging, os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import config
 from utils.codec import decode_frame_b64
 from services.db import init, insert_track, update_sessions

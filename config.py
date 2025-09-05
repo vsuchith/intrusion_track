@@ -27,7 +27,7 @@ DETECT_CONF = 0.35
 IOU_THRESH = 0.5
 
 # ReID / linking
-REID_MODEL = "osnet_x0_25_msmt17"
+REID_MODEL = "osnet_x0_25"
 SIM_THRESHOLD = 0.48
 MERGE_WINDOW_MS = 15000
 
