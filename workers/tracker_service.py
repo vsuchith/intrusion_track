@@ -1,5 +1,8 @@
+# This script assigns persistent Track ids within each camera using ByteTrack
+
 import pika, json, numpy as np, cv2, traceback, logging
-from boxmot import BYTETracker
+from types import SimpleNamespace
+from ultralytics.trackers.byte_tracker import BYTETracker
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import config
@@ -14,9 +17,35 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("tracker_service")
 
 class PerCamTracker:
-    def __init__(self): self.tracker = BYTETracker()
-    def update(self, dets, frame): return self.tracker.update(dets, frame)  # Mx8
+    """
+    Per-camera ByteTrack wrapper with sane defaults.
+    Ultralytics BYTETracker requires an `args` namespace; we create it here.
+    """
+    def __init__(self, frame_rate=30,
+                 track_thresh=0.50,     # min det score to start/keep a track
+                 match_thresh=0.80,     # IoU for matching detections to tracks
+                 track_buffer=30,       # keep "lost" tracks this many frames
+                 min_box_area=10,       # filter tiny boxes
+                 mot20=False):          # special tuning for MOT20 (usually False)
+        args = SimpleNamespace(
+            track_thresh=track_thresh,
+            match_thresh=match_thresh,
+            track_buffer=track_buffer,
+            min_box_area=min_box_area,
+            mot20=mot20
+        )
+        self.tracker = BYTETracker(args, frame_rate=frame_rate)
 
+    def update(self, dets, frame):
+        """
+        dets: np.ndarray (N, 6) -> [x1, y1, x2, y2, score, cls] (float32 recommended)
+        frame: BGR image (H, W, 3)
+        returns: list[STrack] with .tlwh and .track_id
+        """
+        H, W = frame.shape[:2]
+        return self.tracker.update(dets, (H, W), (H, W))
+
+# RabbitMQ topology
 def ensure_topology(ch):
     #Subscriber Queue and Exchange Declare
     ch.exchange_declare(exchange=config.EX_DETECTIONS, exchange_type='direct', durable=True)
@@ -34,6 +63,10 @@ def decode_frame_b64(b64):
     arr = np.frombuffer(data, dtype=np.uint8)
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
+
+#Each camera (cam_id) gets its own BYTETracker instance.
+#Those tracker instances live in the state["per_cam"] dictionary.
+#When a new frame from the same camera arrives, you call .update() on the same tracker, so it remembers previous tracks.
 state = {"per_cam": {}}
 
 def on_detections(ch, method, props, body):
@@ -41,14 +74,33 @@ def on_detections(ch, method, props, body):
         data = json.loads(body.decode('utf-8'))
         cam_id = data["cam_id"]
         frame = decode_frame_b64(data["frame_b64"])
+        # Ensure dets is (N, 6) float32: [x1,y1,x2,y2,score,cls]
         dets = np.array(data["detections"], dtype=float) if data["detections"] else np.zeros((0,6), float)
         if cam_id not in state["per_cam"]: 
-            state["per_cam"][cam_id] = PerCamTracker()
+            state["per_cam"][cam_id] = PerCamTracker(frame_rate=1)
+        # Tracks
         tracks = state["per_cam"][cam_id].update(dets, frame)
+
+        # Convert STrack objects to publishing JSON schema
         annots = []
-        for row in tracks:
-            x1,y1,x2,y2,tid,conf,cls,ind = [float(v) for v in row.tolist()]
-            annots.append({"track_id": int(tid), "bbox": [int(x1),int(y1),int(x2),int(y2)], "conf": float(conf), "cls": int(cls)})
+        for t in tracks:
+            # t.tlwh: (x, y, w, h) floats
+            x, y, w, h = map(int, t.tlwh)
+            x1, y1, x2, y2 = x, y, x + w, y + h
+
+            # t.track_id: integer persistent ID within this camera/session
+            tid = int(t.track_id)
+
+            # Some builds set 'score' and 'cls' on STrack; guard with getattr
+            conf = float(getattr(t, "score", 0.0))
+            cls_ = int(getattr(t, "cls", -1))
+
+            annots.append({
+                "track_id": tid,
+                "bbox": [x1, y1, x2, y2],
+                "conf": conf,
+                "cls": cls_
+            })
         out = {
             "cam_id": cam_id, "t_ms": data["t_ms"], "frame_id": data["frame_id"],
             "frame_b64": data["frame_b64"], "tracks": annots

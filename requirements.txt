@@ -2,7 +2,7 @@ pika
 opencv-python
 numpy
 ultralytics
-boxmot
+bytetracker
 torchreid
 Pillow
 sqlalchemy
@@ -12,3 +12,18 @@ transformers
 accelerate
 sentence-transformers
 tqdm
+tensorboard
+Cython
+h5py
+six
+scipy
+matplotlib
+tb-nightly
+future
+yacs
+gdown
+flake8
+yapf
+isort==4.3.21
+imageio
+chardet

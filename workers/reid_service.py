@@ -1,4 +1,7 @@
+# This script assigns cropped (from detections) ReID embeddings to tracks 
+
 import pika, json, numpy as np, cv2, logging, traceback
+import torchvision, torchreid
 from torchreid.utils import FeatureExtractor
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -13,8 +16,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ])
 logger = logging.getLogger("reid_service")
 
-extractor = FeatureExtractor(model_name=config.REID_MODEL, device='cuda' if cv2.cuda.getCudaEnabledDeviceCount()>0 else 'cpu')
+# ReID model (TorchReID)
+extractor = FeatureExtractor(model_name=config.REID_MODEL, model_path='osnet_x0_25_msmt17',device='cuda' if cv2.cuda.getCudaEnabledDeviceCount()>0 else 'cpu')
 
+# RabbitMQ topology
 def ensure_topology(ch):
     #Subscriber Queue and Exchange Declare
     ch.exchange_declare(exchange=config.EX_TRACKS, exchange_type='direct', durable=True)
@@ -40,15 +45,22 @@ def crop(frame, xyxy):
 def on_tracks(ch, method, props, body):
     try:    
         data = json.loads(body.decode('utf-8'))
-        cam_id = data["cam_id"]; frame = decode_frame_b64(data["frame_b64"])
+        cam_id = data["cam_id"]
+        # Base64 → bytes → NumPy buffer → cv2.imdecode → BGR image.
+        frame = decode_frame_b64(data["frame_b64"])
         crops, idx = [], []
+
+        #Clips coords to image bounds and extracts the person patch from the frame.
         for a in data["tracks"]:
             c = crop(frame, a["bbox"])
             if c.size == 0: continue
-            crops.append(c[:,:,::-1])  # RGB
-            idx.append(a)
+            crops.append(c[:,:,::-1])  # convert BGR → RGB for the model
+            idx.append(a) # keep a reference to the original track dict
         if crops:
+            # Runs all crops as a batch through the TorchReID model.
             embs = extractor(crops)  # NxD
+            # L2-normalizes each embedding vector and writes it back into the same data["tracks"] elements
+            # idx holds references to those dicts
             for a, e in zip(idx, embs):
                 a["embedding"] = (e / (np.linalg.norm(e)+1e-12)).astype(np.float32).tolist()
         out = {"cam_id": cam_id, "t_ms": data["t_ms"], "frame_id": data["frame_id"],
