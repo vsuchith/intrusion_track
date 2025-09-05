@@ -13,12 +13,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ])
 logger = logging.getLogger("camera_publisher")
 
+# RabbitMQ topology
 def ensure_topology(ch):
     ch.exchange_declare(exchange=config.EX_FRAMES, exchange_type='direct', durable=True)
     ch.queue_declare(queue=config.Q_FRAMES_ANY, durable=True)
     ch.queue_bind(queue=config.Q_FRAMES_ANY, exchange=config.EX_FRAMES, routing_key='raw_frames')
 
-
+"""
 def publish_camera(cam_id, src):
     #Open a separate connection per thread
     target_fps = 1.0           # how many frames per second you want
@@ -75,6 +76,82 @@ def publish_camera(cam_id, src):
         cap.release()
         ch.close()
         conn.close()
+"""
+def publish_camera(cam_id, src, target_fps=1.0):
+    """Open a camera and publish one frame approximately every 1/target_fps seconds."""
+    params = pika.ConnectionParameters(
+        host='localhost',
+        port=5672,
+        virtual_host='/',
+        credentials=pika.PlainCredentials('guest', 'guest'),
+        heartbeat=30,
+        blocked_connection_timeout=60,
+        socket_timeout=60
+    )
+    conn = pika.BlockingConnection(params)
+    ch = conn.channel()
+    ensure_topology(ch)
+
+    rk = "raw_frames"
+    cap = cv2.VideoCapture(src)
+    if not cap.isOpened():
+        logger.error("[Camera %s] cannot open source: %s", cam_id, src)
+        ch.close(); conn.close()
+        return
+
+    # Try to keep webcam buffer small (may not work on all backends)
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+    target_fps = 1.0
+    period = 1.0 / float(target_fps)
+    next_tick = time.monotonic()
+    frame_id = 0
+
+    try:
+        while True:
+            # sleep until next tick
+            now = time.monotonic()
+            if now < next_tick:
+                time.sleep(next_tick - now)
+
+            # flush buffered frames until tick
+            flush_until = next_tick
+            while time.monotonic() < flush_until:
+                cap.grab()   # discard one frame
+                time.sleep(0.002)
+
+            # now read the freshest frame
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                logger.error("[Camera %s] cannot read frame; stopping", cam_id)
+                break
+
+            msg = {
+                "cam_id": cam_id,
+                "frame_id": frame_id,
+                "t_ms": now_ms(),
+                "frame_b64": encode_frame_b64(frame, 80),
+            }
+            ch.basic_publish(
+                exchange=config.EX_FRAMES,
+                routing_key=rk,
+                body=json.dumps(msg).encode("utf-8"),
+                properties=pika.BasicProperties(delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE),
+            )
+            logger.info("[Camera %s] published frame %d", cam_id, frame_id)
+            frame_id += 1
+
+            next_tick += period
+
+    finally:
+        cap.release()
+        try:
+            ch.close()
+        finally:
+            conn.close()
+
 
 def main():
     threads = []
