@@ -77,8 +77,82 @@ def publish_camera(cam_id, src):
         ch.close()
         conn.close()
 """
+def open_capture(src):
+    cap = cv2.VideoCapture(src, cv2.CAP_V4L2)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception: pass
+    return cap
+
 def publish_camera(cam_id, src, target_fps=1.0):
-    """Open a camera and publish one frame approximately every 1/target_fps seconds."""
+    # Open a camera and publish one frame approximately every 1/target_fps seconds.
+    params = pika.ConnectionParameters(
+        host='localhost',
+        port=5672,
+        virtual_host='/',
+        credentials=pika.PlainCredentials('guest', 'guest'),
+        heartbeat=30,
+        blocked_connection_timeout=60,
+        socket_timeout=60
+    )
+    conn = pika.BlockingConnection(params)
+    ch = conn.channel()
+    ensure_topology(ch)
+
+    rk = "raw_frames"
+    period = 1.0/float(target_fps)
+    next_tick = time.monotonic()
+    frame_id = 0
+    cap = open_capture(src)
+    retry = 0
+    if not cap.isOpened():
+        logger.error("[Camera %s] cannot open source: %s", cam_id, src)
+        ch.close(); conn.close()
+        return
+
+    try:
+        while True:
+            now = time.monotonic()
+            if now < next_tick:
+                time.sleep(next_tick - now)
+
+            for _ in range(5):
+                if time.monotonic() >= next_tick: break
+                cap.grab(); time.sleep(0.003)
+
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                logger.error("[Camera %s] read failed; attempting reopen...", cam_id)
+                cap.release()
+                time.sleep(min(2**retry, 10))   # backoff up to 10s
+                cap = open_capture(src)
+                if not cap.isOpened():
+                    retry = min(retry+1, 3)
+                    continue
+                retry = 0
+                next_tick += period
+                continue
+
+            # success path
+            retry = 0
+            msg = {"cam_id": cam_id, "frame_id": frame_id, "t_ms": now_ms(),
+                   "frame_b64": encode_frame_b64(frame, 80)}
+            ch.basic_publish(exchange=config.EX_FRAMES, routing_key="raw_frames",
+                             body=json.dumps(msg).encode("utf-8"),
+                             properties=pika.BasicProperties(
+                                 delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE))
+            logger.info("[Camera %s] published frame %d", cam_id, frame_id)
+            frame_id += 1
+            next_tick += period
+    finally:
+        cap.release()
+        ch.close(); conn.close()
+
+"""
+def publish_camera(cam_id, src, target_fps=1.0):
+    # Open a camera and publish one frame approximately every 1/target_fps seconds.
     params = pika.ConnectionParameters(
         host='localhost',
         port=5672,
@@ -151,7 +225,7 @@ def publish_camera(cam_id, src, target_fps=1.0):
             ch.close()
         finally:
             conn.close()
-
+"""
 
 def main():
     threads = []
