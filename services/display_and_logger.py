@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("display_service")
 
 def ensure_topology(ch):
-    ch.exchange_declare(exchange=config.EX_GLOBAL_TRACKS, exchange_type='topic', durable=True)
+    ch.exchange_declare(exchange=config.EX_GLOBAL_TRACKS, exchange_type='direct', durable=True)
     ch.queue_declare(queue=config.Q_DISPLAY, durable=True)
     ch.queue_bind(queue=config.Q_DISPLAY, exchange=config.EX_GLOBAL_TRACKS, routing_key='global_track_frames')
 
@@ -32,9 +32,46 @@ def on_msg(ch, method, props, body, state):
         insert_track(state["conn"], cam_id, gid, tid, (x1,y1,x2,y2), a.get("conf",1.0), t_ms)
         present.add(gid)
     state["last_seen"] = update_sessions(state["conn"], {cam_id: present}, state["last_seen"])
+
+    # --- window management: one window per cam_id ---
+    if "windows" not in state:
+        state["windows"] = {}
+
+    if cam_id not in state["windows"]:
+        # Create a resizable window and tile it
+        cv2.namedWindow(cam_id, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(cam_id, 960, 540)  # adjust to taste
+
+        # simple tiling: place based on count
+        idx = len(state["windows"])
+        x_offset = (idx % 2) * 980
+        y_offset = (idx // 2) * 560
+        try:
+            cv2.moveWindow(cam_id, x_offset, y_offset)
+        except Exception:
+            pass
+
+        state["windows"][cam_id] = True
+
     cv2.imshow(cam_id, frame)
-    if cv2.waitKey(1) & 0xFF == 27:
+
+    # ESC closes all
+    key = cv2.waitKey(1) & 0xFF
+    if key == 27:
         ch.stop_consuming()
+
+    # If user closes a window manually (click X), stop consuming
+    try:
+        if cv2.getWindowProperty(cam_id, cv2.WND_PROP_VISIBLE) < 1:
+            ch.stop_consuming()
+    except Exception:
+        # Some backends may throw if window not found; ignore
+        pass    
+
+
+    #cv2.imshow(cam_id, frame)
+    #if cv2.waitKey(1) & 0xFF == 27:
+    #    ch.stop_consuming()
     #ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def main():
