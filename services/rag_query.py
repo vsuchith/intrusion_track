@@ -1,4 +1,6 @@
-import sys, chromadb
+import os, chromadb
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from services.llm_adapter import generate_with_llama2
 import config

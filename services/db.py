@@ -28,7 +28,8 @@ def get_conn():
 
 def init():
     conn = get_conn()
-    with conn: conn.executescript(SCHEMA)
+    with conn: 
+        conn.executescript(SCHEMA)
     return conn
 
 def insert_track(conn, cam_id, gid, tid, bbox, conf, t_ms):
@@ -37,8 +38,9 @@ def insert_track(conn, cam_id, gid, tid, bbox, conf, t_ms):
         conn.execute("INSERT INTO tracks(cam_id,global_id,track_id,x1,y1,x2,y2,conf,t_ms) VALUES(?,?,?,?,?,?,?,?,?)",
                      (cam_id, gid, tid, x1,y1,x2,y2, conf, t_ms))
 
-def update_sessions(conn, present_ids_by_cam, last_seen, timeout_ms=2000):
-    now_ms = int(time.time()*1000)
+def update_sessions(conn, present_ids_by_cam, last_seen, timeout_ms=2000, now_ms=None):
+    if now_ms is None:
+        now_ms = int(time.time()*1000)
     # close timed-out
     for cam_id, seen_map in list(last_seen.items()):
         to_close = [gid for gid, t in list(seen_map.items()) if now_ms - t > timeout_ms and gid not in present_ids_by_cam.get(cam_id, set())]
