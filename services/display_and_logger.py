@@ -20,18 +20,56 @@ def ensure_topology(ch):
     ch.queue_declare(queue=config.Q_DISPLAY, durable=True)
     ch.queue_bind(queue=config.Q_DISPLAY, exchange=config.EX_GLOBAL_TRACKS, routing_key='global_track_frames')
 
+"""
+Example message body (JSON):
+{
+  "cam_id": "camA",
+  "t_ms": 10000,
+  "tracks": [
+    {"bbox":[100,120,220,380], "track_id": 4, "global_id": 7, "conf":0.92},
+    {"bbox":[300,150,420,360], "track_id": 1, "global_id": 12, "conf":0.88}
+  ]
+}
+
+-> insert_track writes 2 rows to tracks table
+-> present_ids_by_cam = {"camA": {7, 12}}
+-> update_sessions finds no open session for (camA,7) or (camA,12), so it inserts two sessions rows with t_enter_ms = now_ms. 
+-> It then sets last_seen["camA"][7] = now_ms, 
+   last_seen["camA"][12] = now_ms
+
+Next message at t_ms=11000 shows only global_id=7:
+
+-> present_ids_by_cam = {"camA": {7}}
+-> update_sessions: 
+    -> For 12, if now_ms - last_seen["camA"][12] > timeout_ms it will close its session by writing t_exit_ms
+    -> It keeps 7 open and refreshes last_seen["camA"][7]
+
+If the very next message is for camB at t_ms=11200 and includes global_id=7,
+update_sessions will open a session for (camB,7) as well. This enables later cross-camera “transition” logic.
+
+"""
+
 def on_msg(ch, method, props, body, state):
     data = json.loads(body.decode('utf-8'))
-    cam_id = data["cam_id"]; t_ms = data["t_ms"]
+    cam_id = data["cam_id"]
+    t_ms = data["t_ms"]
     frame = decode_frame_b64(data["frame_b64"])
+    logger.info(f"[display and logger service] got {len(data.get('tracks', []))} tracks from cam={cam_id}")
     present = set()
     for a in data.get("tracks", []):
-        x1,y1,x2,y2 = a["bbox"]; gid = a.get("global_id", -1); tid = a["track_id"]
+        gid = int(a.get("global_id", -1))
+        if gid < 0: continue
+        tid = int(a["track_id"])
+        x1,y1,x2,y2 = map(int, a["bbox"])
         cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
         cv2.putText(frame, f"G{gid}/T{tid}", (x1, max(0,y1-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-        insert_track(state["conn"], cam_id, gid, tid, (x1,y1,x2,y2), a.get("conf",1.0), t_ms)
+        insert_track(state["conn"], cam_id, gid, tid, (x1,y1,x2,y2), float(a.get("conf",1.0)), t_ms)
+        logger.info(f"[db] inserted track cam={cam_id} gid={gid} tid={tid} bbox=({x1},{y1},{x2},{y2}) conf={a.get('conf',1.0)} t_ms={t_ms}")
         present.add(gid)
-    state["last_seen"] = update_sessions(state["conn"], {cam_id: present}, state["last_seen"])
+    # {"camA": {7, 12}}
+    logger.info(f"[sessions] updating sessions with present ids by cam: {{{cam_id}: {present}}}")
+    state["last_seen"] = update_sessions(state["conn"], {cam_id: present}, state["last_seen"], now_ms=t_ms)
+    logger.info(f"[sessions] updated last_seen: {state['last_seen']}")
 
     # --- window management: one window per cam_id ---
     if "windows" not in state:
@@ -65,7 +103,6 @@ def on_msg(ch, method, props, body, state):
         if cv2.getWindowProperty(cam_id, cv2.WND_PROP_VISIBLE) < 1:
             ch.stop_consuming()
     except Exception:
-        # Some backends may throw if window not found; ignore
         pass    
 
 
